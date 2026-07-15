@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>踢回去！</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .game-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .header {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .name-input {
+    padding: 6px 10px;
+    border: 2px solid #000;
+    border-radius: 8px;
+    font-size: 15px;
+    font-family: inherit;
+    width: 120px;
+    text-align: center;
+    background: #fff;
+    outline: none;
+  }
+  .stat-box {
+    font-size: 15px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    padding: 4px 8px;
+    border: 1.5px solid #000;
+    border-radius: 6px;
+    background: #fff;
+  }
+  .btn {
+    padding: 6px 14px;
+    border: 2px solid #000;
+    background: #000;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn.secondary {
+    background: transparent;
+    color: #000;
+  }
+  canvas {
+    border: 2px solid #000;
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+    max-width: 100%;
+    height: auto;
+    touch-action: none;
+  }
+  .hint {
+    font-size: 12px;
+    color: #666;
+    text-align: center;
+    line-height: 1.5;
+  }
+  .overlay {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(255,255,255,0.95);
+    border: 2px solid #000;
+    border-radius: 12px;
+    padding: 28px 36px;
+    text-align: center;
+    display: none;
+    z-index: 10;
+    min-width: 260px;
+  }
+  .overlay.show { display: block; }
+  .overlay h2 { font-size: 22px; margin-bottom: 12px; }
+  .overlay .big-score { font-size: 36px; font-weight: 700; margin: 8px 0; }
+  .overlay p { font-size: 14px; color: #555; margin-bottom: 6px; }
+  .overlay .btn { margin-top: 12px; }
+  .lives {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .heart {
+    font-size: 18px;
+  }
+</style>
+</head>
+<body>
+
+<div class="game-container">
+  <div class="header">
+    <input class="name-input" id="buildingName" value="XX公司" placeholder="公司名" />
+    <span class="stat-box">得分: <span id="score">0</span></span>
+    <span class="stat-box">最高: <span id="highScore">0</span></span>
+    <div class="lives" id="livesBox">❤️❤️❤️</div>
+    <button class="btn secondary" id="resetBtn">重置</button>
+  </div>
+  <div style="position:relative;">
+    <canvas id="gameCanvas" width="360" height="520"></canvas>
+    <div class="overlay" id="startOverlay">
+      <h2>我还在上班，谁都别想走</h2>
+      <p>员工们拿着辞职信想跳楼离职</p>
+      <p>滑动控制你的位置，踢他们回去!</p>
+      <p>离职3人就游戏结束</p>
+      <button class="btn" id="startBtn">开始游戏</button>
+    </div>
+    <div class="overlay" id="gameoverOverlay">
+      <h2>公司失守！</h2>
+      <p>在<span id="finalCompany">XX公司</span></p>
+      <p>你成功阻止了<span id="finalKicks">0</span>个人离职！</p>
+      <div class="big-score" id="finalScore">0</div>
+      <p>最高记录: <span id="finalHigh">0</span></p>
+      <button class="btn" id="restartBtn">再来一次</button>
+    </div>
+  </div>
+  <div class="hint">
+    左右滑动 = 移动HR位置 · 点击/空格 = 踢击<br>
+    碰到踢腿动作就踢回去！别让人跑了！
+  </div>
+</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const highScoreEl = document.getElementById('highScore');
+  const livesBox = document.getElementById('livesBox');
+  const nameInput = document.getElementById('buildingName');
+  const resetBtn = document.getElementById('resetBtn');
+  const startOverlay = document.getElementById('startOverlay');
+  const gameoverOverlay = document.getElementById('gameoverOverlay');
+  const startBtn = document.getElementById('startBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const finalCompany = document.getElementById('finalCompany');
+  const finalScore = document.getElementById('finalScore');
+  const finalKicks = document.getElementById('finalKicks');
+  const finalHigh = document.getElementById('finalHigh');
+
+  let highScore = parseInt(localStorage.getItem('kickBackHighScore') || '0');
+  highScoreEl.textContent = highScore;
+
+  let score = 0;
+  let lives = 3;
+  let buildingName = 'XX公司';
+  let gameState = 'menu';
+  let gameStarted = false;
+
+  const BUILDING_X = 230;
+  const BUILDING_W = 110;
+  const BUILDING_TOP = 50;
+  const BUILDING_H = 180;
+  const BUILDING_BOTTOM = BUILDING_TOP + BUILDING_H;
+  const GROUND_Y = 480;
+  const DOOR_W = 28;
+  const DOOR_H = 40;
+  const DOOR_X = BUILDING_X + BUILDING_W/2 - DOOR_W/2;
+  const DOOR_Y = BUILDING_BOTTOM - DOOR_H;
+
+  // 难度递增参数 - 基础难度更高
+  let difficulty = 1;
+  let baseGravity = 0.08; // 基础重力更大，下落更快
+  let baseMaxSpeed = 6.5; // 基础最大速度更快
+
+  let jumper = {
+    x: BUILDING_X + BUILDING_W/2,
+    y: BUILDING_TOP + 10,
+    vy: 0,
+    vx: 0,
+    angle: 0,
+    legPhase: 0,
+    fallTime: 0
+  };
+
+  let kicker = {
+    x: 120,
+    y: GROUND_Y - 10,
+    kicking: false,
+    kickTimer: 0,
+    kickPhase: 0
+  };
+
+  let particles = [];
+  let floatTexts = [];
+  let kickEffects = [];
+
+  function resize() {
+    const maxW = Math.min(400, window.innerWidth - 40);
+    const scale = maxW / 360;
+    canvas.style.width = maxW + 'px';
+    canvas.style.height = (520 * scale) + 'px';
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function updateLives() {
+    let hearts = '';
+    for (let i = 0; i < lives; i++) hearts += '❤️';
+    for (let i = lives; i < 3; i++) hearts += '🖤';
+    livesBox.innerHTML = hearts;
+  }
+
+  function resetJumper() {
+    const startOffset = (Math.random() - 0.5) * 90;
+    jumper.x = BUILDING_X + BUILDING_W/2 + startOffset;
+    jumper.y = BUILDING_TOP + 10;
+    // 初始速度更快
+    jumper.vy = -1.5 - Math.random() * 1.5;
+    // 难度越高，水平速度范围越大，更刁钻
+    const speedRange = 6 + difficulty * 2.5;
+    jumper.vx = -speedRange + Math.random() * (speedRange * 2);
+    jumper.angle = 0;
+    jumper.fallTime = 0;
+    if (gameState !== 'gameover') gameState = 'playing';
+  }
+
+  function checkKickCollision() {
+    const kickerBoxW = 55;
+    const kickerBoxH = 75;
+    const dx = Math.abs(jumper.x - kicker.x);
+    const dy = Math.abs(jumper.y - (kicker.y - 30));
+    return dx < kickerBoxW && dy < kickerBoxH && kicker.kicking && jumper.y > 250 && jumper.y < GROUND_Y - 5;
+  }
+
+  function doKick() {
+    gameState = 'flying_back';
+    const targetX = DOOR_X + DOOR_W/2;
+    const targetY = DOOR_Y + DOOR_H/2;
+    const dx = targetX - jumper.x;
+    const dy = targetY - jumper.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const speed = 8 + difficulty * 0.5;
+    jumper.vx = (dx / dist) * speed;
+    jumper.vy = (dy / dist) * speed - 2;
+    jumper.angle = -0.4;
+    score++;
+    scoreEl.textContent = score;
+
+    // 每3个人难度递增
+    difficulty = 1 + Math.floor(score / 3) * 0.4;
+
+    for (let i = 0; i < 5; i++) {
+      kickEffects.push({
+        x: jumper.x, y: jumper.y,
+        angle: -Math.PI/4 + (Math.random() - 0.5) * 0.6,
+        length: 30 + Math.random() * 25,
+        life: 15, maxLife: 15
+      });
+    }
+
+    for (let i = 0; i < 15; i++) {
+      particles.push({
+        x: jumper.x, y: jumper.y,
+        vx: (Math.random() - 0.5) * 12,
+        vy: (Math.random() - 0.5) * 12,
+        life: 35, maxLife: 35,
+        size: 2 + Math.random() * 3
+      });
+    }
+
+    floatTexts.push({
+      x: jumper.x, y: jumper.y - 50,
+      text: '回去！',
+      life: 50, vy: -1.5, size: 28
+    });
+  }
+
+  function loseLife() {
+    lives--;
+    updateLives();
+    floatTexts.push({
+      x: jumper.x, y: jumper.y - 30,
+      text: '跑了！',
+      life: 40, vy: -1, size: 22
+    });
+    if (lives <= 0) {
+      gameState = 'gameover';
+      gameStarted = false;
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('kickBackHighScore', highScore);
+        highScoreEl.textContent = highScore;
+      }
+      setTimeout(() => {
+        finalCompany.textContent = buildingName || 'XX公司';
+        finalScore.textContent = score;
+        finalKicks.textContent = score;
+        finalHigh.textContent = highScore;
+        gameoverOverlay.classList.add('show');
+      }, 800);
+    } else {
+      setTimeout(resetJumper, 600);
+    }
+  }
+
+  function kick() {
+    if (!gameStarted) return;
+    if (gameState !== 'playing') {
+      if (gameState === 'gameover') startGame();
+      return;
+    }
+
+    kicker.kicking = true;
+    kicker.kickTimer = 22;
+    kicker.kickPhase = 0;
+
+    if (checkKickCollision()) {
+      doKick();
+    }
+  }
+
+  function startGame() {
+    score = 0;
+    lives = 3;
+    difficulty = 1;
+    scoreEl.textContent = '0';
+    updateLives();
+    gameState = 'playing';
+    gameStarted = true;
+    startOverlay.classList.remove('show');
+    gameoverOverlay.classList.remove('show');
+    resetJumper();
+    kicker.x = 120;
+    particles = [];
+    floatTexts = [];
+    kickEffects = [];
+  }
+
+  function resetGame() {
+    startGame();
+  }
+
+  function drawPerson(ctx, x, y, angle, phase, isKicking, kickProgress, colorType, hasResignation) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    const isGray = colorType === 'kicked';
+    ctx.fillStyle = isGray ? '#888' : '#000';
+    ctx.strokeStyle = isGray ? '#888' : '#000';
+
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.beginPath();
+    ctx.arc(0, -54, 13, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, -42);
+    ctx.lineTo(0, -36);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-12, -36);
+    ctx.lineTo(12, -36);
+    ctx.lineTo(10, -5);
+    ctx.lineTo(-10, -5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(0, -36);
+    ctx.lineTo(-3, -28);
+    ctx.moveTo(0, -36);
+    ctx.lineTo(3, -28);
+    ctx.stroke();
+
+    ctx.lineWidth = 6;
+    if (isKicking) {
+      ctx.beginPath();
+      ctx.moveTo(-10, -32);
+      ctx.lineTo(-28, -22);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10, -32);
+      ctx.lineTo(28, -40);
+      ctx.stroke();
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(-28, -22, 4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(28, -40, 4, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(-10, -32);
+      ctx.lineTo(-22, -18 + Math.sin(phase)*5);
+      ctx.stroke();
+
+      if (hasResignation) {
+        ctx.beginPath();
+        ctx.moveTo(10, -32);
+        ctx.lineTo(24, -25);
+        ctx.stroke();
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(24, -25, 4, 0, Math.PI*2);
+        ctx.fill();
+
+        ctx.save();
+        ctx.translate(24, -32);
+        ctx.rotate(-0.3);
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = isGray ? '#888' : '#000';
+        ctx.lineWidth = 1;
+        ctx.fillRect(-10, -14, 20, 26);
+        ctx.strokeRect(-10, -14, 20, 26);
+        ctx.fillStyle = isGray ? '#888' : '#000';
+        ctx.font = 'bold 6px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('辞', 0, -4);
+        ctx.fillText('职', 0, 4);
+        ctx.fillText('信', 0, 12);
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(10, -32);
+        ctx.lineTo(22, -18 - Math.sin(phase)*5);
+        ctx.stroke();
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(22, -18 - Math.sin(phase)*5, 4, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(-22, -18 + Math.sin(phase)*5, 4, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    ctx.lineWidth = 7;
+    if (isKicking) {
+      const kickAngle = 1.4 * Math.sin(kickProgress * Math.PI);
+      ctx.beginPath();
+      ctx.moveTo(-7, -5);
+      ctx.lineTo(-10, 8);
+      ctx.lineTo(-14, 20);
+      ctx.stroke();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(-15, 22, 8, 4, -0.2, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.lineWidth = 7;
+      ctx.save();
+      ctx.translate(7, -5);
+      ctx.rotate(-kickAngle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 18);
+      ctx.stroke();
+      ctx.translate(0, 18);
+      ctx.rotate(kickAngle * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 18);
+      ctx.stroke();
+      ctx.translate(0, 18);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(2, 2, 9, 5, 0.3, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      if (kickProgress > 0.3 && kickProgress < 0.8) {
+        ctx.strokeStyle = isGray ? '#888' : '#000';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath();
+        ctx.moveTo(15, -25);
+        ctx.quadraticCurveTo(35, -55, 55, -35);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(-7, -5);
+      ctx.lineTo(-12, 15 + Math.sin(phase)*6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(7, -5);
+      ctx.lineTo(12, 15 - Math.sin(phase)*6);
+      ctx.stroke();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(-13, 18 + Math.sin(phase)*6, 7, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(13, 18 - Math.sin(phase)*6, 7, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  function drawBuilding(ctx) {
+    const bx = BUILDING_X;
+    const by = BUILDING_TOP;
+    const bw = BUILDING_W;
+    const bh = BUILDING_H;
+
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2.5;
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(bx - 8, by);
+    ctx.lineTo(bx + bw + 8, by);
+    ctx.lineTo(bx + bw + 8, by - 10);
+    ctx.lineTo(bx - 8, by - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(bx - 4, by - 5);
+    ctx.lineTo(bx + bw + 4, by - 5);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(bx - 6, by + bh);
+    ctx.lineTo(bx + bw + 6, by + bh);
+    ctx.lineTo(bx + bw + 6, by + bh + 8);
+    ctx.lineTo(bx - 6, by + bh + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = '#fff';
+    const winW = 14;
+    const winH = 18;
+    const gapX = 6;
+    const gapY = 8;
+    const startX = bx + 48;
+    const startY = by + 12;
+
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 3; col++) {
+        const wx = startX + col * (winW + gapX);
+        const wy = startY + row * (winH + gapY);
+        ctx.strokeRect(wx, wy, winW, winH);
+        ctx.beginPath();
+        ctx.moveTo(wx + winW/2, wy);
+        ctx.lineTo(wx + winW/2, wy + winH);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(wx, wy + winH/2);
+        ctx.lineTo(wx + winW, wy + winH/2);
+        ctx.stroke();
+      }
+    }
+
+    ctx.save();
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillStyle = '#000';
+    ctx.textAlign = 'center';
+    const name = buildingName;
+    const nameX = bx + 22;
+    const nameAreaTop = by + 15;
+    const nameAreaBottom = by + bh - 50;
+    const nameAreaHeight = nameAreaBottom - nameAreaTop;
+    const nameTotalHeight = name.length * 18;
+    const startNameY = nameAreaTop + (nameAreaHeight - nameTotalHeight) / 2 + 10;
+
+    for (let i = 0; i < name.length; i++) {
+      ctx.fillText(name[i], nameX, startNameY + i * 18);
+    }
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.fillRect(DOOR_X, DOOR_Y, DOOR_W, DOOR_H);
+    ctx.strokeRect(DOOR_X, DOOR_Y, DOOR_W, DOOR_H);
+    ctx.beginPath();
+    ctx.arc(DOOR_X + DOOR_W - 6, DOOR_Y + DOOR_H/2, 3, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#ccc';
+    ctx.beginPath();
+    ctx.moveTo(bx + 3, by + 5);
+    ctx.lineTo(bx + 3, by + bh - 5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(bx + bw - 3, by + 5);
+    ctx.lineTo(bx + bw - 3, by + bh - 5);
+    ctx.stroke();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND_Y);
+    ctx.lineTo(360, GROUND_Y);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 360; i += 20) {
+      ctx.beginPath();
+      ctx.moveTo(i, GROUND_Y);
+      ctx.lineTo(i + 10, GROUND_Y + 3);
+      ctx.stroke();
+    }
+
+    drawBuilding(ctx);
+
+    let jumperAngle = jumper.angle;
+    let jumperPhase = 0;
+    if (gameState === 'playing' || gameState === 'missed') {
+      jumperPhase = Date.now() / 100;
+      jumperAngle = Math.atan2(jumper.vy, jumper.vx * 3) * 0.4;
+    } else if (gameState === 'flying_back') {
+      jumperPhase = Date.now() / 80;
+      jumperAngle = -0.4 + Math.sin(Date.now()/100) * 0.2;
+    }
+
+    const jumperColor = gameState === 'flying_back' ? 'kicked' : 'normal';
+    const hasLetter = gameState !== 'flying_back';
+    drawPerson(ctx, jumper.x, jumper.y, jumperAngle, jumperPhase, false, 0, jumperColor, hasLetter);
+
+    const kickProgress = kicker.kicking ? (22 - kicker.kickTimer) / 22 : 0;
+    drawPerson(ctx, kicker.x, kicker.y, 0, 0, kicker.kicking, kickProgress, 'normal', false);
+
+    for (let i = kickEffects.length - 1; i >= 0; i--) {
+      const ke = kickEffects[i];
+      ctx.save();
+      ctx.globalAlpha = ke.life / ke.maxLife;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3;
+      ctx.translate(ke.x, ke.y);
+      ctx.rotate(ke.angle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(ke.length, 0);
+      ctx.stroke();
+      ctx.restore();
+      ke.life--;
+      if (ke.life <= 0) kickEffects.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      ctx.globalAlpha = p.life / p.maxLife;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
+      ctx.fill();
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.1;
+      p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    for (let i = floatTexts.length - 1; i >= 0; i--) {
+      const ft = floatTexts[i];
+      ctx.save();
+      ctx.globalAlpha = ft.life / 50;
+      ctx.font = 'bold ' + (ft.size || 24) + 'px sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.textAlign = 'center';
+      ctx.fillText(ft.text, ft.x, ft.y);
+      ctx.restore();
+      ft.y += ft.vy;
+      ft.life--;
+      if (ft.life <= 0) floatTexts.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function update() {
+    if (!gameStarted || gameState === 'gameover') return;
+
+    if (gameState === 'playing') {
+      jumper.fallTime++;
+      const accel = baseGravity + (jumper.fallTime * 0.001) * difficulty;
+      jumper.vy += accel;
+      const maxSpeed = baseMaxSpeed * difficulty;
+      if (jumper.vy > maxSpeed) jumper.vy = maxSpeed;
+
+      jumper.y += jumper.vy;
+      jumper.x += jumper.vx;
+
+      jumper.angle = Math.atan2(jumper.vy, jumper.vx * 3) * 0.4;
+
+      if ((jumper.x < -20 || jumper.x > 380) && jumper.y < GROUND_Y - 30) {
+        resetJumper();
+        return;
+      }
+
+      if (jumper.x < 20) {
+        jumper.x = 20;
+        jumper.vx = Math.abs(jumper.vx) * 0.6;
+      }
+      if (jumper.x > 340) {
+        jumper.x = 340;
+        jumper.vx = -Math.abs(jumper.vx) * 0.6;
+      }
+
+      if (jumper.y > GROUND_Y - 20) {
+        loseLife();
+        return;
+      }
+
+      if (checkKickCollision()) {
+        doKick();
+      }
+    } else if (gameState === 'flying_back') {
+      const targetX = DOOR_X + DOOR_W/2;
+      const targetY = DOOR_Y + DOOR_H/2;
+      const dx = targetX - jumper.x;
+      const dy = targetY - jumper.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+
+      if (dist < 25) {
+        resetJumper();
+        return;
+      }
+
+      const speed = 7;
+      jumper.vx = (dx / dist) * speed;
+      jumper.vy = (dy / dist) * speed;
+
+      jumper.x += jumper.vx;
+      jumper.y += jumper.vy;
+      jumper.angle += 0.06;
+
+      if (jumper.x < -50 || jumper.x > 410 || jumper.y < -50) {
+        resetJumper();
+      }
+    }
+
+    if (kicker.kicking) {
+      kicker.kickTimer--;
+      if (kicker.kickTimer <= 0) kicker.kicking = false;
+    }
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  canvas.addEventListener('pointermove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const x = (e.clientX - rect.left) * scaleX;
+    kicker.x = Math.max(30, Math.min(330, x));
+  });
+
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const x = (e.clientX - rect.left) * scaleX;
+    kicker.x = Math.max(30, Math.min(330, x));
+    kick();
+  });
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const touch = e.touches[0];
+    const x = (touch.clientX - rect.left) * scaleX;
+    kicker.x = Math.max(30, Math.min(330, x));
+    kick();
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const touch = e.touches[0];
+    const x = (touch.clientX - rect.left) * scaleX;
+    kicker.x = Math.max(30, Math.min(330, x));
+  }, { passive: false });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      kick();
+    }
+    if (e.code === 'ArrowLeft') {
+      kicker.x = Math.max(30, kicker.x - 15);
+    }
+    if (e.code === 'ArrowRight') {
+      kicker.x = Math.min(330, kicker.x + 15);
+    }
+  });
+
+  nameInput.addEventListener('input', (e) => {
+    buildingName = e.target.value;
+  });
+
+  resetBtn.addEventListener('click', () => {
+    if (gameStarted) {
+      startGame();
+    }
+  });
+
+  startBtn.addEventListener('click', startGame);
+  restartBtn.addEventListener('click', startGame);
+
+  updateLives();
+  startOverlay.classList.add('show');
+  loop();
+})();
+</script>
+
+</body>
+</html>

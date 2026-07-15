@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>踢回去！</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .game-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .header {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .name-input {
+    padding: 8px 12px;
+    border: 2px solid #000;
+    border-radius: 8px;
+    font-size: 16px;
+    font-family: inherit;
+    width: 140px;
+    text-align: center;
+    background: #fff;
+    outline: none;
+  }
+  .name-input:focus { border-color: #333; }
+  .score-board {
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .btn {
+    padding: 8px 16px;
+    border: 2px solid #000;
+    background: #000;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn.secondary {
+    background: transparent;
+    color: #000;
+  }
+  canvas {
+    border: 2px solid #000;
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+    max-width: 100%;
+    height: auto;
+    touch-action: none;
+  }
+  .hint {
+    font-size: 13px;
+    color: #666;
+    text-align: center;
+    line-height: 1.5;
+  }
+  .gameover-overlay {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(255,255,255,0.95);
+    border: 2px solid #000;
+    border-radius: 12px;
+    padding: 24px 32px;
+    text-align: center;
+    display: none;
+    z-index: 10;
+  }
+  .gameover-overlay.show { display: block; }
+  .gameover-overlay h2 { font-size: 22px; margin-bottom: 8px; }
+  .gameover-overlay p { font-size: 15px; color: #555; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<div class="game-container">
+  <div class="header">
+    <input class="name-input" id="buildingName" value="XX公司" placeholder="楼名" />
+    <span class="score-board">得分: <span id="score">0</span></span>
+    <button class="btn secondary" id="resetBtn">重置</button>
+  </div>
+  <div style="position:relative;">
+    <canvas id="gameCanvas" width="360" height="520"></canvas>
+    <div class="gameover-overlay" id="gameoverOverlay">
+      <h2>没踢中！</h2>
+      <p>点击画面重新开始</p>
+    </div>
+  </div>
+  <div class="hint">
+    左右滑动 = 移动位置 · 点击画面 / 按空格 = 踢击<br>
+    每次掉落角度不同，看准时机！
+  </div>
+</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const nameInput = document.getElementById('buildingName');
+  const resetBtn = document.getElementById('resetBtn');
+  const overlay = document.getElementById('gameoverOverlay');
+
+  let score = 0;
+  let buildingName = 'XX公司';
+  let gameState = 'playing';
+
+  const BUILDING_X = 230;
+  const BUILDING_W = 110;
+  const BUILDING_TOP = 50;
+  const BUILDING_H = 180;
+  const BUILDING_BOTTOM = BUILDING_TOP + BUILDING_H;
+  const GROUND_Y = 480;
+
+  const GRAVITY = 0.05;
+  const MAX_FALL_SPEED = 5.5;
+
+  let jumper = {
+    x: BUILDING_X + BUILDING_W/2,
+    y: BUILDING_TOP + 10,
+    vy: 0,
+    vx: 0,
+    angle: 0,
+    legPhase: 0,
+    fallTime: 0
+  };
+
+  let kicker = {
+    x: 120,
+    y: GROUND_Y - 10,
+    kicking: false,
+    kickTimer: 0,
+    kickPhase: 0
+  };
+
+  let particles = [];
+  let floatTexts = [];
+  let kickEffects = [];
+
+  function resize() {
+    const maxW = Math.min(400, window.innerWidth - 40);
+    const scale = maxW / 360;
+    canvas.style.width = maxW + 'px';
+    canvas.style.height = (520 * scale) + 'px';
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function resetJumper() {
+    const startOffset = (Math.random() - 0.5) * 90;
+    jumper.x = BUILDING_X + BUILDING_W/2 + startOffset;
+    jumper.y = BUILDING_TOP + 10;
+    jumper.vy = -2.0 - Math.random() * 2.0;
+    jumper.vx = -6.5 + Math.random() * 10;
+    jumper.angle = 0;
+    jumper.fallTime = 0;
+    gameState = 'playing';
+    overlay.classList.remove('show');
+  }
+
+  function kick() {
+    if (gameState !== 'playing') {
+      if (gameState === 'gameover') resetGame();
+      return;
+    }
+
+    kicker.kicking = true;
+    kicker.kickTimer = 22;
+    kicker.kickPhase = 0;
+
+    const dx = Math.abs(jumper.x - kicker.x);
+    const dy = Math.abs(jumper.y - (kicker.y - 35));
+    const dist = Math.sqrt(dx*dx + dy*dy);
+
+    if (dist < 65 && jumper.y > 280 && jumper.y < GROUND_Y - 10) {
+      gameState = 'flying_back';
+      jumper.vy = -10 - Math.random() * 3;
+      jumper.vx = -3.5 - Math.random() * 2.5;
+      jumper.angle = -0.4;
+      score++;
+      scoreEl.textContent = score;
+
+      for (let i = 0; i < 5; i++) {
+        kickEffects.push({
+          x: jumper.x, y: jumper.y,
+          angle: -Math.PI/4 + (Math.random() - 0.5) * 0.6,
+          length: 30 + Math.random() * 25,
+          life: 15, maxLife: 15
+        });
+      }
+
+      for (let i = 0; i < 15; i++) {
+        particles.push({
+          x: jumper.x, y: jumper.y,
+          vx: (Math.random() - 0.5) * 12,
+          vy: (Math.random() - 0.5) * 12,
+          life: 35, maxLife: 35,
+          size: 2 + Math.random() * 3
+        });
+      }
+
+      floatTexts.push({
+        x: jumper.x, y: jumper.y - 50,
+        text: '回去！',
+        life: 50, vy: -1.5, size: 28
+      });
+    } else {
+      gameState = 'missed';
+      floatTexts.push({
+        x: kicker.x, y: kicker.y - 60,
+        text: 'miss',
+        life: 30, vy: -1, size: 18
+      });
+    }
+  }
+
+  function resetGame() {
+    score = 0;
+    scoreEl.textContent = '0';
+    resetJumper();
+    kicker.x = 120;
+    particles = [];
+    floatTexts = [];
+    kickEffects = [];
+    overlay.classList.remove('show');
+  }
+
+  function drawPerson(ctx, x, y, angle, phase, isKicking, kickProgress) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#000';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.beginPath();
+    ctx.arc(0, -54, 13, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, -42);
+    ctx.lineTo(0, -36);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-12, -36);
+    ctx.lineTo(12, -36);
+    ctx.lineTo(10, -5);
+    ctx.lineTo(-10, -5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(0, -36);
+    ctx.lineTo(-3, -28);
+    ctx.moveTo(0, -36);
+    ctx.lineTo(3, -28);
+    ctx.stroke();
+
+    ctx.lineWidth = 6;
+    if (isKicking) {
+      ctx.beginPath();
+      ctx.moveTo(-10, -32);
+      ctx.lineTo(-28, -22);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10, -32);
+      ctx.lineTo(28, -40);
+      ctx.stroke();
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(-28, -22, 4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(28, -40, 4, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(-10, -32);
+      ctx.lineTo(-22, -18 + Math.sin(phase)*5);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10, -32);
+      ctx.lineTo(22, -18 - Math.sin(phase)*5);
+      ctx.stroke();
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(-22, -18 + Math.sin(phase)*5, 4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(22, -18 - Math.sin(phase)*5, 4, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    ctx.lineWidth = 7;
+    if (isKicking) {
+      const kickAngle = 1.4 * Math.sin(kickProgress * Math.PI);
+      ctx.beginPath();
+      ctx.moveTo(-7, -5);
+      ctx.lineTo(-10, 8);
+      ctx.lineTo(-14, 20);
+      ctx.stroke();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(-15, 22, 8, 4, -0.2, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.lineWidth = 7;
+      ctx.save();
+      ctx.translate(7, -5);
+      ctx.rotate(-kickAngle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 18);
+      ctx.stroke();
+      ctx.translate(0, 18);
+      ctx.rotate(kickAngle * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 18);
+      ctx.stroke();
+      ctx.translate(0, 18);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(2, 2, 9, 5, 0.3, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      if (kickProgress > 0.3 && kickProgress < 0.8) {
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath();
+        ctx.moveTo(15, -25);
+        ctx.quadraticCurveTo(35, -55, 55, -35);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(-7, -5);
+      ctx.lineTo(-12, 15 + Math.sin(phase)*6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(7, -5);
+      ctx.lineTo(12, 15 - Math.sin(phase)*6);
+      ctx.stroke();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(-13, 18 + Math.sin(phase)*6, 7, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(13, 18 - Math.sin(phase)*6, 7, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  function drawBuilding(ctx) {
+    const bx = BUILDING_X;
+    const by = BUILDING_TOP;
+    const bw = BUILDING_W;
+    const bh = BUILDING_H;
+
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2.5;
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(bx - 8, by);
+    ctx.lineTo(bx + bw + 8, by);
+    ctx.lineTo(bx + bw + 8, by - 10);
+    ctx.lineTo(bx - 8, by - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(bx - 4, by - 5);
+    ctx.lineTo(bx + bw + 4, by - 5);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(bx - 6, by + bh);
+    ctx.lineTo(bx + bw + 6, by + bh);
+    ctx.lineTo(bx + bw + 6, by + bh + 8);
+    ctx.lineTo(bx - 6, by + bh + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = '#fff';
+    const winW = 14;
+    const winH = 18;
+    const gapX = 6;
+    const gapY = 8;
+    const startX = bx + 48;
+    const startY = by + 12;
+
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 3; col++) {
+        const wx = startX + col * (winW + gapX);
+        const wy = startY + row * (winH + gapY);
+        ctx.strokeRect(wx, wy, winW, winH);
+        ctx.beginPath();
+        ctx.moveTo(wx + winW/2, wy);
+        ctx.lineTo(wx + winW/2, wy + winH);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(wx, wy + winH/2);
+        ctx.lineTo(wx + winW, wy + winH/2);
+        ctx.stroke();
+      }
+    }
+
+    // 楼名 - 竖排，左侧，使用当前 buildingName 变量
+    ctx.save();
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillStyle = '#000';
+    ctx.textAlign = 'center';
+    const name = buildingName;
+    const nameX = bx + 22;
+    const nameAreaTop = by + 15;
+    const nameAreaBottom = by + bh - 10;
+    const nameAreaHeight = nameAreaBottom - nameAreaTop;
+    const nameTotalHeight = name.length * 18;
+    const startNameY = nameAreaTop + (nameAreaHeight - nameTotalHeight) / 2 + 10;
+
+    for (let i = 0; i < name.length; i++) {
+      ctx.fillText(name[i], nameX, startNameY + i * 18);
+    }
+    ctx.restore();
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#ccc';
+    ctx.beginPath();
+    ctx.moveTo(bx + 3, by + 5);
+    ctx.lineTo(bx + 3, by + bh - 5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(bx + bw - 3, by + 5);
+    ctx.lineTo(bx + bw - 3, by + bh - 5);
+    ctx.stroke();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND_Y);
+    ctx.lineTo(360, GROUND_Y);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 360; i += 20) {
+      ctx.beginPath();
+      ctx.moveTo(i, GROUND_Y);
+      ctx.lineTo(i + 10, GROUND_Y + 3);
+      ctx.stroke();
+    }
+
+    drawBuilding(ctx);
+
+    let jumperAngle = jumper.angle;
+    let jumperPhase = 0;
+    if (gameState === 'playing' || gameState === 'missed') {
+      jumperPhase = Date.now() / 100;
+      jumperAngle = Math.atan2(jumper.vy, jumper.vx * 3) * 0.4;
+    } else if (gameState === 'flying_back') {
+      jumperPhase = Date.now() / 80;
+      jumperAngle = -0.4 + Math.sin(Date.now()/100) * 0.2;
+    }
+    drawPerson(ctx, jumper.x, jumper.y, jumperAngle, jumperPhase, false, 0);
+
+    const kickProgress = kicker.kicking ? (22 - kicker.kickTimer) / 22 : 0;
+    drawPerson(ctx, kicker.x, kicker.y, 0, 0, kicker.kicking, kickProgress);
+
+    for (let i = kickEffects.length - 1; i >= 0; i--) {
+      const ke = kickEffects[i];
+      ctx.save();
+      ctx.globalAlpha = ke.life / ke.maxLife;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3;
+      ctx.translate(ke.x, ke.y);
+      ctx.rotate(ke.angle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(ke.length, 0);
+      ctx.stroke();
+      ctx.restore();
+      ke.life--;
+      if (ke.life <= 0) kickEffects.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      ctx.globalAlpha = p.life / p.maxLife;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
+      ctx.fill();
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.1;
+      p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    for (let i = floatTexts.length - 1; i >= 0; i--) {
+      const ft = floatTexts[i];
+      ctx.save();
+      ctx.globalAlpha = ft.life / 50;
+      ctx.font = 'bold ' + (ft.size || 24) + 'px sans-serif';
+      ctx.fillStyle = '#000';
+      ctx.textAlign = 'center';
+      ctx.fillText(ft.text, ft.x, ft.y);
+      ctx.restore();
+      ft.y += ft.vy;
+      ft.life--;
+      if (ft.life <= 0) floatTexts.splice(i, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    if (gameState === 'gameover') {
+      overlay.classList.add('show');
+    }
+  }
+
+  function update() {
+    if (gameState === 'playing') {
+      jumper.fallTime++;
+      const accel = GRAVITY + (jumper.fallTime * 0.001);
+      jumper.vy += accel;
+      if (jumper.vy > MAX_FALL_SPEED) jumper.vy = MAX_FALL_SPEED;
+
+      jumper.y += jumper.vy;
+      jumper.x += jumper.vx;
+
+      jumper.angle = Math.atan2(jumper.vy, jumper.vx * 3) * 0.4;
+
+      if (jumper.x < 20) {
+        jumper.x = 20;
+        jumper.vx = Math.abs(jumper.vx) * 0.6;
+      }
+      if (jumper.x > 340) {
+        jumper.x = 340;
+        jumper.vx = -Math.abs(jumper.vx) * 0.6;
+      }
+
+      if (jumper.y > GROUND_Y - 20) {
+        gameState = 'gameover';
+        floatTexts.push({
+          x: jumper.x, y: jumper.y - 20,
+          text: '啪...',
+          life: 60, vy: -0.5, size: 20
+        });
+      }
+    } else if (gameState === 'missed') {
+      jumper.vy += GRAVITY + 0.05;
+      if (jumper.vy > MAX_FALL_SPEED) jumper.vy = MAX_FALL_SPEED;
+      jumper.y += jumper.vy;
+      jumper.x += jumper.vx;
+      if (jumper.y > GROUND_Y - 20) {
+        gameState = 'gameover';
+      }
+    } else if (gameState === 'flying_back') {
+      jumper.vy += GRAVITY * 0.5;
+      jumper.x += jumper.vx;
+      jumper.y += jumper.vy;
+      jumper.angle += 0.06;
+
+      if (jumper.y < BUILDING_BOTTOM + 30 && jumper.x < BUILDING_X + BUILDING_W) {
+        resetJumper();
+      }
+      if (jumper.x < -50 || jumper.y < -50) {
+        resetJumper();
+      }
+    }
+
+    if (kicker.kicking) {
+      kicker.kickTimer--;
+      if (kicker.kickTimer <= 0) kicker.kicking = false;
+    }
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  canvas.addEventListener('pointermove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const x = (e.clientX - rect.left) * scaleX;
+    kicker.x = Math.max(30, Math.min(330, x));
+  });
+
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const x = (e.clientX - rect.left) * scaleX;
+    kicker.x = Math.max(30, Math.min(330, x));
+    kick();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      kick();
+    }
+    if (e.code === 'ArrowLeft') {
+      kicker.x = Math.max(30, kicker.x - 15);
+    }
+    if (e.code === 'ArrowRight') {
+      kicker.x = Math.min(330, kicker.x + 15);
+    }
+  });
+
+  nameInput.addEventListener('input', (e) => {
+    buildingName = e.target.value;
+  });
+
+  resetBtn.addEventListener('click', resetGame);
+
+  loop();
+})();
+</script>
+
+</body>
+</html>
